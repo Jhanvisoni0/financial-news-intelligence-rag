@@ -1,5 +1,7 @@
 # Financial News Intelligence RAG Platform
 
+**[Try the live app](https://financial-news-intelligence-rag-sujhzuavqsv5fmhxatmvpd.streamlit.app/)** — ask real questions about Apple, Microsoft, and Realty Income filings/news and get cited answers, no setup required. (Runs against a cached snapshot of the real corpus; bring your own OpenAI API key to generate answers, entered locally in your browser session and never stored.)
+
 A Retrieval-Augmented Generation (RAG) system that answers natural language questions about SEC filings and financial news, with citations back to the exact source document. Built on Azure Databricks using a Medallion architecture, with a production-style layer of MLOps, IaC, and CI/CD wrapped around the core RAG pipeline.
 
 **Example query:** *"What are the key risk factors in Apple's latest 10-K?"* → a grounded, cited answer pulling directly from Apple's actual filing text — not a general-knowledge guess.
@@ -132,6 +134,24 @@ This project hit a number of genuine, non-trivial technical problems along the w
 - Identifying the wrong Azure identity (human user vs. `AzureDatabricks` service principal) blocking Key Vault access
 - A PySpark UDF pickling failure caused by a Rust-based tokenizer library
 - ChromaDB's incompatibility with DBFS-mounted storage (SQLite requires file operations DBFS's FUSE mount doesn't support)
+
+---
+
+---
+
+## Interactive tools
+
+Beyond the main Databricks pipeline, this repo includes three standalone local/deployable tools under `interactive_demo/`:
+
+| Tool | What it does | Databricks/Azure needed? |
+|---|---|---|
+| `app.py` | Educational chunking/embedding visualizer with real filing excerpts and the actual 15-question eval set | No |
+| `app_live.py` | Connects live via SQL to the real Databricks Gold table (~1,390 chunks) for retrieval + generation | Yes (live cluster) |
+| `app_offline.py` | **Deployed publicly** ([try it here](https://financial-news-intelligence-rag-sujhzuavqsv5fmhxatmvpd.streamlit.app/)) — reads a cached snapshot of the real Gold table, so it runs with zero Azure/Databricks dependency | No |
+
+`export_once.py` creates the local snapshot `app_offline.py` reads from, by connecting once to the live Databricks SQL endpoint (needs a running cluster) and saving the results to a local Parquet file. This was a deliberate design choice: the public deployment needed to work independently of this project's Azure trial period, and re-running the export refreshes the snapshot whenever needed without requiring a permanent live connection.
+
+**Note on data freshness:** `app_offline.py` reflects a point-in-time snapshot, not live data - it will not automatically pick up new filings or news ingested after the export was taken.
 
 ---
 
