@@ -18,7 +18,13 @@ from openai import OpenAI
 
 st.set_page_config(page_title="Financial RAG - Offline Demo", layout="wide")
 
-CACHE_FILE = "gold_chunks_cache.parquet"
+# Resolve the cache file path relative to THIS SCRIPT's location, not the
+# current working directory - Streamlit Cloud runs scripts with the repo
+# root as the working directory, not the script's own folder, so a plain
+# relative path like "gold_chunks_cache.parquet" fails to find the file
+# even though it exists right next to this script.
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+CACHE_FILE = os.path.join(SCRIPT_DIR, "gold_chunks_cache.parquet")
 
 
 @st.cache_resource
@@ -89,6 +95,11 @@ if df is None:
     st.stop()
 
 st.success(f"Loaded {len(df)} real chunks from local cache (no live connection needed).")
+st.caption(
+    "Note: this is a static snapshot exported once from the live Databricks "
+    "pipeline, not a live-updating feed. It reflects the corpus as of the "
+    "export date, not real-time data."
+)
 
 openai_key = st.sidebar.text_input("OpenAI API Key (only needed to generate answers):", type="password")
 st.sidebar.caption("Retrieval works without this. It's only used to generate the final cited answer.")
