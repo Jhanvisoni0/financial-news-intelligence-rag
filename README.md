@@ -52,6 +52,8 @@ Most "RAG demo" projects retrieve from a handful of clean text files. This one i
                               User question → cited answer
 ```
 
+**Accessing the system:** the pipeline above runs in Databricks; it's exposed through three separate front-ends (see [Interactive tools](#interactive-tools) below), including a [public live demo](https://financial-news-intelligence-rag-sujhzuavqsv5fmhxatmvpd.streamlit.app/) requiring no Databricks/Azure access.
+
 **Supporting layers around the core pipeline:** MLflow (experiment tracking), Databricks Workflows (scheduled orchestration), a BI Dashboard (Gold-layer analytics), Terraform (IaC for storage + secrets), and GitHub Actions (CI/CD).
 
 ---
