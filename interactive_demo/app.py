@@ -1,164 +1,192 @@
-# interactive_demo/app.py
-# Interactive visualization of chunking and embedding - the two pipeline
-# stages between raw text and vector search. Paste any text, adjust chunk
-# size/overlap, and see the real embedding model (same one used in the
-# project's Gold layer) place each chunk in 2D space based on meaning.
+# interactive_demo/app_offline.py
+# Fully offline version - reads from a local parquet cache (created once by
+# export_once.py) instead of querying Databricks live. Works with no Azure/
+# Databricks connection at all - only needs an OpenAI key for generation
+# (retrieval works with no key needed).
 #
-# Run with: streamlit run app.py
-# (requires: pip install streamlit sentence-transformers tiktoken scikit-learn plotly)
+# First run export_once.py while your cluster is running (one time only),
+# then this app works forever after, independent of Databricks/Azure.
+#
+# Run with: streamlit run app_offline.py
 
+import os
 import streamlit as st
-import tiktoken
 import numpy as np
+import pandas as pd
 from sentence_transformers import SentenceTransformer
-from sklearn.decomposition import PCA
-import plotly.graph_objects as go
+from openai import OpenAI
 
+st.set_page_config(page_title="Financial RAG - Offline Demo", layout="wide")
 
-st.set_page_config(page_title="Chunking & Embedding Explorer", layout="wide")
+# Resolve the cache file path relative to THIS SCRIPT's location, not the
+# current working directory - Streamlit Cloud runs scripts with the repo
+# root as the working directory, not the script's own folder, so a plain
+# relative path like "gold_chunks_cache.parquet" fails to find the file
+# even though it exists right next to this script.
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+CACHE_FILE = os.path.join(SCRIPT_DIR, "gold_chunks_cache.parquet")
 
-
-# =========================================================
-# Core logic (same functions used in the actual project pipeline)
-# =========================================================
 
 @st.cache_resource
 def load_embedding_model():
-    """Load once and cache across reruns - avoids reloading the model on every interaction."""
     return SentenceTransformer("all-MiniLM-L6-v2")
 
 
-def chunk_text(text: str, chunk_size: int, overlap: int) -> list:
-    """Token-aware chunking, identical logic to the project's Silver layer."""
-    if not text.strip():
-        return []
-
-    encoding = tiktoken.get_encoding("cl100k_base")
-    tokens = encoding.encode(text)
-
-    if len(tokens) <= chunk_size:
-        return [text]
-
-    chunks = []
-    start = 0
-    while start < len(tokens):
-        end = min(start + chunk_size, len(tokens))
-        chunk_tokens = tokens[start:end]
-        chunks.append(encoding.decode(chunk_tokens))
-        if end == len(tokens):
-            break
-        start = end - overlap
-
-    return chunks
+@st.cache_data
+def load_cached_data():
+    if not os.path.exists(CACHE_FILE):
+        return None
+    return pd.read_parquet(CACHE_FILE)
 
 
-def count_tokens(text: str) -> int:
-    encoding = tiktoken.get_encoding("cl100k_base")
-    return len(encoding.encode(text))
+@st.cache_resource
+def build_embedding_matrix(_df: pd.DataFrame, cache_key: str) -> np.ndarray:
+    """
+    Pre-compute a single, stacked, normalized embedding matrix ONCE, instead of
+    converting each row's embedding from a Python list to a numpy array on
+    every single query. The original per-query Python loop (iterating ~5,000+
+    rows and calling np.array() on each, every time "Ask" was clicked) caused
+    repeated memory churn that likely contributed to an out-of-memory crash
+    (segfault) after the corpus grew from ~1,094 to ~5,000+ chunks (11 tickers).
+    This vectorized approach computes the matrix once, cached across the whole
+    session, and reuses it for every query - far less memory pressure and
+    much faster (single matrix multiply instead of a per-row Python loop).
+
+    NOTE: the leading underscore on _df tells Streamlit's cache to skip
+    hashing the (large, slow-to-hash) DataFrame itself; cache_key is the
+    small, cheap value Streamlit actually uses to decide whether to recompute.
+    """
+    matrix = np.stack(_df["embedding"].values).astype(np.float32)
+    # Pre-normalize once, so retrieval becomes a plain dot product (cosine
+    # similarity without repeated norm calculations per query).
+    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+    norms[norms == 0] = 1e-10  # avoid division by zero for any empty embeddings
+    return matrix / norms
 
 
-def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
-    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
+def retrieve(query: str, df: pd.DataFrame, embedding_matrix: np.ndarray, model, k: int = 5) -> list:
+    """
+    Vectorized retrieval: one matrix-vector multiply against the pre-normalized
+    embedding matrix, instead of a Python loop recomputing every row's array
+    conversion and cosine similarity individually on every single query.
+    """
+    query_embedding = model.encode(query).astype(np.float32)
+    query_norm = np.linalg.norm(query_embedding)
+    if query_norm > 0:
+        query_embedding = query_embedding / query_norm
+
+    similarities = embedding_matrix @ query_embedding  # single vectorized operation
+    top_k_idx = np.argsort(similarities)[::-1][:k]
+
+    return [(float(similarities[i]), df.iloc[i]) for i in top_k_idx]
 
 
-# =========================================================
-# UI
-# =========================================================
+def build_prompt(query: str, retrieved: list) -> str:
+    context_blocks = []
+    for i, (score, row) in enumerate(retrieved):
+        source_label = f"[Source {i+1}: {row['ticker']} - {row['source_type']} - {row.get('doc_subtype', 'N/A')}]"
+        context_blocks.append(f"{source_label}\n{row['chunk_text']}")
+    context_text = "\n\n".join(context_blocks)
 
-st.title("Chunking & Embedding Explorer")
+    return f"""You are a financial research assistant. Answer the question using ONLY the information in the sources below. Do not use outside knowledge.
+
+CITATION RULES (strict):
+- EVERY sentence that states a fact must end with a citation like [Source 1].
+- Cite ONLY the specific source(s) that actually contain that exact fact.
+- Most sentences should have exactly ONE citation.
+- If the sources don't contain enough information to answer the question, say so explicitly rather than guessing.
+
+SOURCES:
+{context_text}
+
+QUESTION: {query}
+
+ANSWER (cite only the specific source for each individual claim):"""
+
+
+st.title("Financial RAG — Offline Demo")
 st.caption(
-    "Visualizes the two pipeline stages between raw text and vector search: "
-    "splitting text into token-sized chunks, then embedding each chunk into "
-    "a point in meaning-space. Uses the same tokenizer (tiktoken) and "
-    "embedding model (all-MiniLM-L6-v2) as the main project pipeline."
+    "Runs entirely locally against a cached snapshot of the real ~1,390-chunk "
+    "Gold corpus from Databricks - no Azure/Databricks connection required. "
+    "The snapshot was exported once via export_once.py while the cluster was "
+    "running; retrieval works fully offline, generation needs an OpenAI key."
 )
 
-DEFAULT_TEXT = """Apple Inc. faces several risk factors including intellectual property disputes, where the company's products may be alleged to infringe existing patents held by competitors. The company also faces significant tariff-related risks, as new tariffs on imports from China, India, and other countries could materially impact its supply chain and gross margins. Additionally, Apple relies heavily on third-party software developers, and any decision by these developers to discontinue support for Apple's platforms could negatively affect customer demand. Microsoft's Azure cloud business has shown strong growth, with Intelligent Cloud revenue increasing significantly, driven by demand across all workloads including AI consumption services. Realty Income, as a REIT, must distribute at least 90% of its taxable income as dividends to maintain its tax-advantaged status, and its business model focuses on generating stable, predictable revenue through long-term commercial real estate leases."""
+df = load_cached_data()
 
-text_input = st.text_area(
-    "Paste text to chunk and embed (or use the sample SEC-style text below):",
-    value=DEFAULT_TEXT,
-    height=150,
+if df is None:
+    st.error(
+        f"No cached data found ({CACHE_FILE} missing). Run `python export_once.py` "
+        "once first, while your Databricks cluster is running, to create the cache."
+    )
+    st.stop()
+
+st.success(f"Loaded {len(df)} real chunks from local cache (no live connection needed).")
+st.caption(
+    "Note: this is a static snapshot exported once from the live Databricks "
+    "pipeline, not a live-updating feed. It reflects the corpus as of the "
+    "export date, not real-time data."
 )
 
-col1, col2 = st.columns(2)
-with col1:
-    chunk_size = st.slider("Chunk size (tokens)", min_value=20, max_value=200, value=60, step=10)
-with col2:
-    overlap = st.slider("Overlap (tokens)", min_value=0, max_value=50, value=10, step=5)
+openai_key = st.sidebar.text_input("OpenAI API Key (only needed to generate answers):", type="password")
+st.sidebar.caption("Retrieval works without this. It's only used to generate the final cited answer.")
 
-if st.button("Chunk & Embed", type="primary"):
-    chunks = chunk_text(text_input, chunk_size, overlap)
+REAL_EVAL_QUESTIONS = [
+    "What are the key risk factors in Apple's latest 10-K?",
+    "How is Microsoft's Azure cloud business performing?",
+    "What are Realty Income's dividend distribution policies?",
+    "What intellectual property risks does Apple face?",
+    "What recent news has come out about Apple and Chinese memory chip suppliers?",
+    "What is Microsoft's revenue growth in Intelligent Cloud?",
+    "How does Realty Income describe its business model?",
+    "What macroeconomic factors does Apple cite as risks?",
+    "What tariff-related risks does Apple disclose?",
+    "What does Microsoft say about its Productivity and Business Processes segment?",
+    "What is Apple's approach to third-party software developers?",
+    "What is Realty Income's Adjusted EBITDAre and why does it matter?",
+    "What is the outlook for Apple's stock price this year?",
+    "What legal proceedings is Apple currently involved in?",
+    "How has foreign currency impacted Microsoft's reported revenue?",
+]
 
-    if not chunks:
-        st.warning("Please enter some text first.")
+question_choice = st.selectbox("Pick a real evaluation question:", ["(type my own)"] + REAL_EVAL_QUESTIONS)
+query = st.text_input("Your question:") if question_choice == "(type my own)" else question_choice
+
+ticker_filter = st.selectbox("Filter by ticker (optional):", ["(all)"] + sorted(df["ticker"].unique().tolist()))
+
+if st.button("Ask", type="primary") and query:
+    # Build the embedding matrix ONCE against the full dataset (cached across
+    # the whole session - not rebuilt on every query or every filter change).
+    model = load_embedding_model()
+    full_embedding_matrix = build_embedding_matrix(df, cache_key=CACHE_FILE)
+
+    if ticker_filter == "(all)":
+        filtered_df = df.reset_index(drop=True)
+        filtered_matrix = full_embedding_matrix
     else:
-        st.subheader(f"Step 1: Chunking — {len(chunks)} chunk(s) created")
-        st.caption(
-            "Text is split by TOKEN count (using tiktoken, the same tokenizer OpenAI "
-            "models use) rather than by words or characters - so chunk boundaries "
-            "reflect what the model actually 'sees', not just character counts."
-        )
+        # Slice both the dataframe AND the matrix using the same boolean mask,
+        # so row positions stay aligned between the two.
+        mask = (df["ticker"] == ticker_filter).to_numpy()
+        filtered_df = df[mask].reset_index(drop=True)
+        filtered_matrix = full_embedding_matrix[mask]
 
-        colors = ["#e8f0fe", "#fef3e8", "#e8fef0", "#fee8f0", "#f0e8fe", "#fefce8"]
-        for i, chunk in enumerate(chunks):
-            token_count = count_tokens(chunk)
-            with st.expander(f"Chunk {i+1} — {token_count} tokens", expanded=(len(chunks) <= 3)):
-                st.markdown(
-                    f"<div style='background-color:{colors[i % len(colors)]}; "
-                    f"padding:10px; border-radius:5px;'>{chunk}</div>",
-                    unsafe_allow_html=True,
-                )
+    retrieved = retrieve(query, filtered_df, filtered_matrix, model, k=5)
 
-        st.subheader("Step 2: Embedding — chunks placed in meaning-space")
-        st.caption(
-            "Each chunk is converted into a 384-dimensional vector capturing its "
-            "meaning. Since humans can't visualize 384 dimensions, PCA compresses "
-            "this down to 2D for display - chunks discussing similar topics should "
-            "land closer together."
-        )
+    st.subheader("Retrieved sources (from local cache of your real corpus)")
+    for i, (score, row) in enumerate(retrieved):
+        with st.expander(f"[{i+1}] {row['ticker']} - {row['source_type']} - {row.get('doc_subtype','N/A')} (similarity: {score:.3f})"):
+            st.write(row["chunk_text"])
 
-        with st.spinner("Loading embedding model and computing embeddings..."):
-            model = load_embedding_model()
-            embeddings = model.encode(chunks)
-
-        if len(chunks) >= 2:
-            pca = PCA(n_components=2)
-            coords = pca.fit_transform(embeddings)
-
-            fig = go.Figure()
-            for i, (x, y) in enumerate(coords):
-                preview = chunks[i][:80] + ("..." if len(chunks[i]) > 80 else "")
-                fig.add_trace(go.Scatter(
-                    x=[x], y=[y],
-                    mode="markers+text",
-                    marker=dict(size=20, color=colors[i % len(colors)], line=dict(width=2, color="black")),
-                    text=[f"Chunk {i+1}"],
-                    textposition="top center",
-                    hovertext=preview,
-                    hoverinfo="text",
-                    name=f"Chunk {i+1}",
-                ))
-            fig.update_layout(
-                height=500,
-                xaxis_title="PCA dimension 1",
-                yaxis_title="PCA dimension 2",
-                showlegend=False,
+    if openai_key:
+        client = OpenAI(api_key=openai_key)
+        prompt = build_prompt(query, retrieved)
+        with st.spinner("Generating cited answer..."):
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
             )
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("Add more text (producing 2+ chunks) to see the 2D embedding plot.")
-
-        st.subheader("Step 3: Try a query — see which chunk is most relevant")
-        query = st.text_input("Ask a question about the text above:", placeholder="e.g. What risks does Apple face?")
-
-        if query:
-            query_embedding = model.encode(query)
-            similarities = [cosine_similarity(query_embedding, emb) for emb in embeddings]
-            ranked = sorted(enumerate(similarities), key=lambda x: x[1], reverse=True)
-
-            st.write("**Chunks ranked by similarity to your question:**")
-            for rank, (idx, score) in enumerate(ranked):
-                preview = chunks[idx][:150] + ("..." if len(chunks[idx]) > 150 else "")
-                st.markdown(f"**#{rank+1} - Chunk {idx+1}** (similarity: `{score:.3f}`)")
-                st.markdown(f"> {preview}")
+        st.subheader("Answer")
+        st.write(response.choices[0].message.content)
+    else:
+        st.info("Enter an OpenAI API key in the sidebar to generate a cited answer from these real retrieved chunks.")
