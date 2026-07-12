@@ -39,19 +39,46 @@ def load_cached_data():
     return pd.read_parquet(CACHE_FILE)
 
 
-def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
-    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
+@st.cache_resource
+def build_embedding_matrix(_df: pd.DataFrame, cache_key: str) -> np.ndarray:
+    """
+    Pre-compute a single, stacked, normalized embedding matrix ONCE, instead of
+    converting each row's embedding from a Python list to a numpy array on
+    every single query. The original per-query Python loop (iterating ~5,000+
+    rows and calling np.array() on each, every time "Ask" was clicked) caused
+    repeated memory churn that likely contributed to an out-of-memory crash
+    (segfault) after the corpus grew from ~1,094 to ~5,000+ chunks (11 tickers).
+    This vectorized approach computes the matrix once, cached across the whole
+    session, and reuses it for every query - far less memory pressure and
+    much faster (single matrix multiply instead of a per-row Python loop).
+
+    NOTE: the leading underscore on _df tells Streamlit's cache to skip
+    hashing the (large, slow-to-hash) DataFrame itself; cache_key is the
+    small, cheap value Streamlit actually uses to decide whether to recompute.
+    """
+    matrix = np.stack(_df["embedding"].values).astype(np.float32)
+    # Pre-normalize once, so retrieval becomes a plain dot product (cosine
+    # similarity without repeated norm calculations per query).
+    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+    norms[norms == 0] = 1e-10  # avoid division by zero for any empty embeddings
+    return matrix / norms
 
 
-def retrieve(query: str, df: pd.DataFrame, model, k: int = 5) -> list:
-    query_embedding = model.encode(query)
-    scored = []
-    for _, row in df.iterrows():
-        chunk_embedding = np.array(row["embedding"], dtype=np.float32)
-        score = cosine_similarity(query_embedding, chunk_embedding)
-        scored.append((score, row))
-    scored.sort(key=lambda x: x[0], reverse=True)
-    return scored[:k]
+def retrieve(query: str, df: pd.DataFrame, embedding_matrix: np.ndarray, model, k: int = 5) -> list:
+    """
+    Vectorized retrieval: one matrix-vector multiply against the pre-normalized
+    embedding matrix, instead of a Python loop recomputing every row's array
+    conversion and cosine similarity individually on every single query.
+    """
+    query_embedding = model.encode(query).astype(np.float32)
+    query_norm = np.linalg.norm(query_embedding)
+    if query_norm > 0:
+        query_embedding = query_embedding / query_norm
+
+    similarities = embedding_matrix @ query_embedding  # single vectorized operation
+    top_k_idx = np.argsort(similarities)[::-1][:k]
+
+    return [(float(similarities[i]), df.iloc[i]) for i in top_k_idx]
 
 
 def build_prompt(query: str, retrieved: list) -> str:
@@ -128,10 +155,22 @@ query = st.text_input("Your question:") if question_choice == "(type my own)" el
 ticker_filter = st.selectbox("Filter by ticker (optional):", ["(all)"] + sorted(df["ticker"].unique().tolist()))
 
 if st.button("Ask", type="primary") and query:
-    filtered_df = df if ticker_filter == "(all)" else df[df["ticker"] == ticker_filter]
-
+    # Build the embedding matrix ONCE against the full dataset (cached across
+    # the whole session - not rebuilt on every query or every filter change).
     model = load_embedding_model()
-    retrieved = retrieve(query, filtered_df, model, k=5)
+    full_embedding_matrix = build_embedding_matrix(df, cache_key=CACHE_FILE)
+
+    if ticker_filter == "(all)":
+        filtered_df = df.reset_index(drop=True)
+        filtered_matrix = full_embedding_matrix
+    else:
+        # Slice both the dataframe AND the matrix using the same boolean mask,
+        # so row positions stay aligned between the two.
+        mask = (df["ticker"] == ticker_filter).to_numpy()
+        filtered_df = df[mask].reset_index(drop=True)
+        filtered_matrix = full_embedding_matrix[mask]
+
+    retrieved = retrieve(query, filtered_df, filtered_matrix, model, k=5)
 
     st.subheader("Retrieved sources (from local cache of your real corpus)")
     for i, (score, row) in enumerate(retrieved):
