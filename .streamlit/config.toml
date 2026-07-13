@@ -1,0 +1,8 @@
+# Disables Streamlit's file-watcher, which was triggering transformers'
+# lazy-loading introspection into optional vision-model submodules
+# (yolos, zoedepth) that require torchvision - not needed for this app,
+# but the introspection itself was adding startup overhead and appearing
+# immediately before repeated crashes. Not required for local development,
+# only relevant for the deployed (non-interactive-editing) environment.
+[server]
+fileWatcherType = "none"
