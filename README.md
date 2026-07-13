@@ -1,6 +1,6 @@
 # Financial News Intelligence RAG Platform
 
-**[Try the live app](https://financial-news-intelligence-rag-spfkf8yfjgbvxuzqiozyth.streamlit.app/)** — ask real questions about Apple, Microsoft, and Realty Income filings/news and get cited answers, no setup required. Bring your own OpenAI API key (entered locally in your browser session and never stored) - required for both retrieval and generation in this lightweight deployment.
+**[Try the live app](https://financial-news-intelligence-rag-spfkf8yfjgbvxuzqiozyth.streamlit.app/)** — ask real questions about Apple, Microsoft, Realty Income, NVIDIA, and Amazon filings/news and get cited answers, no setup required. Bring your own OpenAI API key (entered locally in your browser session and never stored) - required for both retrieval and generation in this lightweight deployment.
 
 A Retrieval-Augmented Generation (RAG) system that answers natural language questions about SEC filings and financial news, with citations back to the exact source document. Built on Azure Databricks using a Medallion architecture, with a production-style layer of MLOps, IaC, and CI/CD wrapped around the core RAG pipeline.
 
@@ -80,7 +80,7 @@ Most "RAG demo" projects retrieve from a handful of clean text files. This one i
 
 ## Data pipeline: what actually happens at each stage
 
-**Bronze:** Raw ingestion. SEC EDGAR filings (10-K/10-Q for AAPL, MSFT, O) pulled via the public submissions API (no key required, just a descriptive User-Agent). News articles pulled via NewsAPI for the same tickers.
+**Bronze:** Raw ingestion. SEC EDGAR filings (10-K/10-Q for AAPL, MSFT, O, NVDA, AMZN) pulled via the public submissions API (no key required, just a descriptive User-Agent). News articles pulled via NewsAPI for the same tickers.
 
 **Silver:** Two real data-quality problems were found and fixed here (see `ENGINEERING_LOG.md` for full detail):
 1. Modern SEC filings use **Inline XBRL** - machine-readable tag data embedded directly inside the human-readable HTML. Naive HTML stripping let this tag data pollute the extracted text, causing near-zero "risk density" scores and undersized word counts. Fixed with regex-based removal of `ix:`-namespaced elements before parsing.
