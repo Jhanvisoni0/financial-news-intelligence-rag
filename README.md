@@ -1,6 +1,6 @@
 # Financial News Intelligence RAG Platform
 
-**[Try the live app](https://financial-news-intelligence-rag-sujhzuavqsv5fmhxatmvpd.streamlit.app/)** — ask real questions about Apple, Microsoft, and Realty Income filings/news and get cited answers, no setup required. (Runs against a cached snapshot of the real corpus; bring your own OpenAI API key to generate answers, entered locally in your browser session and never stored.)
+**[Try the live app](https://financial-news-intelligence-rag-spfkf8yfjgbvxuzqiozyth.streamlit.app/)** — ask real questions about Apple, Microsoft, and Realty Income filings/news and get cited answers, no setup required. Bring your own OpenAI API key (entered locally in your browser session and never stored) - required for both retrieval and generation in this lightweight deployment.
 
 A Retrieval-Augmented Generation (RAG) system that answers natural language questions about SEC filings and financial news, with citations back to the exact source document. Built on Azure Databricks using a Medallion architecture, with a production-style layer of MLOps, IaC, and CI/CD wrapped around the core RAG pipeline.
 
@@ -52,7 +52,7 @@ Most "RAG demo" projects retrieve from a handful of clean text files. This one i
                               User question → cited answer
 ```
 
-**Accessing the system:** the pipeline above runs in Databricks; it's exposed through three separate front-ends (see [Interactive tools](#interactive-tools) below), including a [public live demo](https://financial-news-intelligence-rag-sujhzuavqsv5fmhxatmvpd.streamlit.app/) requiring no Databricks/Azure access.
+**Accessing the system:** the pipeline above runs in Databricks; it's exposed through three separate front-ends (see [Interactive tools](#interactive-tools) below), including a [public live demo](https://financial-news-intelligence-rag-spfkf8yfjgbvxuzqiozyth.streamlit.app/) requiring no Databricks/Azure access.
 
 **Supporting layers around the core pipeline:** MLflow (experiment tracking), Databricks Workflows (scheduled orchestration), a BI Dashboard (Gold-layer analytics), Terraform (IaC for storage + secrets), and GitHub Actions (CI/CD).
 
@@ -143,17 +143,19 @@ This project hit a number of genuine, non-trivial technical problems along the w
 
 ## Interactive tools
 
-Beyond the main Databricks pipeline, this repo includes three standalone local/deployable tools under `interactive_demo/`:
+Beyond the main Databricks pipeline, this repo includes several standalone local/deployable tools under `interactive_demo/`:
 
-| Tool | What it does | Databricks/Azure needed? |
-|---|---|---|
-| `app.py` | Educational chunking/embedding visualizer with real filing excerpts and the actual 15-question eval set | No |
-| `app_live.py` | Connects live via SQL to the real Databricks Gold table (~1,390 chunks) for retrieval + generation | Yes (live cluster) |
-| `app_offline.py` | **Deployed publicly** ([try it here](https://financial-news-intelligence-rag-sujhzuavqsv5fmhxatmvpd.streamlit.app/)) — reads a cached snapshot of the real Gold table, so it runs with zero Azure/Databricks dependency | No |
+| Tool | What it does | Embeddings | Databricks/Azure needed? |
+|---|---|---|---|
+| `app.py` | Educational chunking/embedding visualizer with real filing excerpts and the actual 15-question eval set | Local (`sentence-transformers`) | No |
+| `app_live.py` | Connects live via SQL to the real Databricks Gold table for retrieval + generation | Local (`sentence-transformers`) | Yes (live cluster) |
+| `app_offline_lite.py` | **Deployed publicly** ([try it here](https://financial-news-intelligence-rag-spfkf8yfjgbvxuzqiozyth.streamlit.app/)) — cached snapshot, no Azure/Databricks dependency | OpenAI API | No |
 
-`export_once.py` creates the local snapshot `app_offline.py` reads from, by connecting once to the live Databricks SQL endpoint (needs a running cluster) and saving the results to a local Parquet file. This was a deliberate design choice: the public deployment needed to work independently of this project's Azure trial period, and re-running the export refreshes the snapshot whenever needed without requiring a permanent live connection.
+`export_once.py` creates a local snapshot of the Databricks Gold table (needs a running cluster, one time). `reembed_with_openai.py` then re-embeds that cached text via OpenAI's API instead of a local model - this doesn't need Databricks at all, only the already-exported text.
 
-**Note on data freshness:** `app_offline.py` reflects a point-in-time snapshot, not live data - it will not automatically pick up new filings or news ingested after the export was taken.
+**Why two different embedding approaches:** the first public deployment (`app_offline.py`, using a local `sentence-transformers` model) repeatedly crashed on Streamlit Community Cloud's free tier with a segmentation fault. Systematic debugging (documented in `ENGINEERING_LOG.md` entry #14) - testing dataset size, pinning dependency versions, disabling Streamlit's file watcher, and adding memory diagnostics - isolated the cause to `torch`/`transformers`' baseline memory footprint alone exceeding the platform's 1GB RAM limit, independent of dataset size. The fix was architectural: `app_offline_lite.py` uses OpenAI's embedding API instead of a local model, removing `torch` from the deployment entirely. This trades a small per-query API cost for a dramatically lighter deployment footprint - a real illustration of the local-inference-vs-API tradeoff in production ML systems.
+
+**Note on data freshness:** the deployed app reflects a point-in-time snapshot, not live data - it will not automatically pick up new filings or news ingested after the export was taken.
 
 ---
 
