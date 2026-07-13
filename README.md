@@ -157,6 +157,16 @@ Beyond the main Databricks pipeline, this repo includes three standalone local/d
 
 ---
 
+---
+
+## Testing & benchmarking
+
+**Unit tests:** `tests/test_utils.py` covers the core pipeline logic (chunking, relevance filtering, feature engineering) independently of Spark/Databricks, run automatically via CI/CD on every push. 15 tests, all passing, including a regression test for the news-relevance-filter bug documented in `ENGINEERING_LOG.md`.
+
+**Benchmark:** `benchmark.py` measures real local execution time for each core function and projects scaling costs from the current ticker set up to a hypothetical 1,200 tickers, using actual observed numbers from the real pipeline run (not estimates). Key finding: every core function runs in single-digit milliseconds with zero ticker-specific logic — scaling is bottlenecked by external API rate limits (SEC, NewsAPI), not the pipeline's own code. At 1,200 tickers, projected embedding cost stays under $6 total. Run it yourself with `python benchmark.py`.
+
+---
+
 ## What I'd improve with more time
 
 - **Structured output for citations.** The remaining citation-quality gap (see Evaluation section) would likely be better solved with OpenAI function calling / a JSON schema enforcing citation structure, rather than further prompt engineering.
