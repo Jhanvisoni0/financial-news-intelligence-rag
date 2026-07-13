@@ -13,8 +13,28 @@ import os
 import streamlit as st
 import numpy as np
 import pandas as pd
+
+# Lightweight memory diagnostics - logs to Streamlit Cloud's log panel so we
+# can see EXACTLY where memory goes, rather than guessing. psutil is a small,
+# pure-Python-friendly library (no heavy compiled dependencies of its own).
+try:
+    import psutil
+    _process = psutil.Process(os.getpid())
+
+    def log_memory(stage: str):
+        mem_mb = _process.memory_info().rss / (1024 * 1024)
+        print(f"[MEMORY] After {stage}: {mem_mb:.1f} MB")
+except ImportError:
+    def log_memory(stage: str):
+        print(f"[MEMORY] psutil not available, skipping check at: {stage}")
+
+log_memory("initial imports (streamlit, numpy, pandas)")
+
 from sentence_transformers import SentenceTransformer
+log_memory("importing sentence_transformers (torch/transformers)")
+
 from openai import OpenAI
+log_memory("importing openai")
 
 st.set_page_config(page_title="Financial RAG - Offline Demo", layout="wide")
 
@@ -29,14 +49,20 @@ CACHE_FILE = os.path.join(SCRIPT_DIR, "gold_chunks_cache.parquet")
 
 @st.cache_resource
 def load_embedding_model():
-    return SentenceTransformer("all-MiniLM-L6-v2")
+    log_memory("BEFORE loading SentenceTransformer model")
+    model = SentenceTransformer("all-MiniLM-L6-v2")
+    log_memory("AFTER loading SentenceTransformer model")
+    return model
 
 
 @st.cache_data
 def load_cached_data():
     if not os.path.exists(CACHE_FILE):
         return None
-    return pd.read_parquet(CACHE_FILE)
+    log_memory("BEFORE reading parquet cache file")
+    df = pd.read_parquet(CACHE_FILE)
+    log_memory(f"AFTER reading parquet cache file ({len(df)} rows)")
+    return df
 
 
 @st.cache_resource
