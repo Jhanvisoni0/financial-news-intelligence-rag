@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 from openai import OpenAI
 
-st.set_page_config(page_title="Financial RAG - Lightweight Demo", layout="wide")
+st.set_page_config(page_title="Financial RAG — Ask Your Filings", layout="wide")
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_FILE = os.path.join(SCRIPT_DIR, "gold_chunks_cache_openai.parquet")
@@ -81,13 +81,12 @@ QUESTION: {query}
 ANSWER (cite only the specific source for each individual claim):"""
 
 
-st.title("Financial RAG — Lightweight Demo")
+st.title("💰 Financial RAG — Ask Your Filings")
 st.caption(
-    "Runs against a cached snapshot of the real corpus, using OpenAI's "
-    "embedding API instead of a local model - a lighter-weight deployment "
-    "built after diagnosing a memory limit with the local-model version "
-    "(see ENGINEERING_LOG.md). An OpenAI key is required for both retrieval "
-    "and answer generation in this version."
+    "Ask a real question about Apple, Microsoft, or Realty Income and get a "
+    "cited answer pulled directly from their actual SEC filings and news — "
+    "not a general-knowledge guess. Grounded, verifiable, and honest when it "
+    "doesn't know."
 )
 
 df = load_cached_data()
@@ -102,7 +101,13 @@ if df is None:
 st.success(f"Loaded {len(df)} real chunks from local cache.")
 
 openai_key = st.sidebar.text_input("OpenAI API Key (required):", type="password")
-st.sidebar.caption("Needed for both retrieval (query embedding) and answer generation in this version.")
+st.sidebar.caption("Needed for both retrieval (query embedding) and answer generation.")
+st.sidebar.markdown("---")
+st.sidebar.caption(
+    "🔧 Runs on OpenAI's embedding API rather than a local model, keeping "
+    "this deployment lightweight — [see the engineering write-up](https://github.com/Jhanvisoni0/financial-news-intelligence-rag/blob/main/ENGINEERING_LOG.md) "
+    "for why."
+)
 
 REAL_EVAL_QUESTIONS = [
     "What are the key risk factors in Apple's latest 10-K?",
