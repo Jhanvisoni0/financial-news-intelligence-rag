@@ -1,25 +1,18 @@
-# Databricks notebook source
-# SEC EDGAR Ingestion — Bronze Layer
-# Pulls company filings (10-K, 10-Q) from SEC EDGAR's public API.
-# No API key required — SEC only requires a descriptive User-Agent header.
-# Docs: https://www.sec.gov/os/webmaster-faq#developers
+
 
 import requests
 import time
 from datetime import datetime, timezone
 
-# ---- CONFIG ----
-# IMPORTANT: SEC requires a real identifying User-Agent (your name/email).
-# Requests without this, or with a generic one, can get you rate-limited or blocked.
-USER_AGENT = "Jhanvi Soni jhanvisoni0@gmail.com"  # <-- already edited for you, double check it's right
 
+USER_AGENT = "Jhanvi Soni jhanvisoni0@gmail.com"  
 HEADERS = {"User-Agent": USER_AGENT}
 
-# Tickers to track -> SEC CIK numbers (Central Index Key, SEC's internal company ID)
+# Tickers to track 
 TICKERS_TO_CIK = {
     "AAPL": "0000320193",
     "MSFT": "0000789019",
-    "O": "0000726728",       # Realty Income (REIT example)
+    "O": "0000726728",       # Realty Income 
 }
 
 FORM_TYPES = ["10-K", "10-Q"]
@@ -74,7 +67,7 @@ def ingest_all_filings() -> list:
         filings_json = get_company_filings(cik)
         recent_filings = extract_recent_filings(filings_json, FORM_TYPES)
 
-        # Limit to 4 most recent filings per ticker to keep this manageable for now
+      
         recent_filings = recent_filings[:4]
 
         for filing in recent_filings:
@@ -98,7 +91,7 @@ def ingest_all_filings() -> list:
             }
             all_records.append(record)
 
-            time.sleep(0.5)  # be polite to SEC's servers
+            time.sleep(0.5)  
 
     return all_records
 
