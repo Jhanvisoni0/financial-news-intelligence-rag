@@ -1,22 +1,12 @@
-# Databricks notebook source
-# Silver Layer — Chunking
-# Splits documents into token-aware chunks suitable for embedding.
-# Uses tiktoken (same tokenizer family as OpenAI models) to count tokens accurately,
-# rather than guessing based on word count or character count.
-
 import tiktoken
 from pyspark.sql.functions import udf, col, explode
 from pyspark.sql.types import ArrayType, StringType, StructType, StructField, IntegerType
 
-# ---- CONFIG ----
-CHUNK_SIZE_TOKENS = 600     # target chunk size, in tokens (well within embedding model limits)
-CHUNK_OVERLAP_TOKENS = 100  # overlap between consecutive chunks, to avoid losing context at boundaries
 
-# NOTE: We do NOT create the tiktoken encoding object here at module level.
-# tiktoken's core tokenizer is implemented in Rust and cannot be pickled/shipped
-# to Spark worker processes. Instead, each function creates its own encoding
-# instance locally - tiktoken caches this efficiently per-process, so this is
-# fast after the first call on each worker.
+CHUNK_SIZE_TOKENS = 600    
+CHUNK_OVERLAP_TOKENS = 100  
+
+
 
 def _get_encoding():
     return tiktoken.get_encoding("cl100k_base")
@@ -36,7 +26,7 @@ def chunk_text(text: str, chunk_size: int = CHUNK_SIZE_TOKENS, overlap: int = CH
     encoding = _get_encoding()
     tokens = encoding.encode(text)
     if len(tokens) <= chunk_size:
-        # Short document (e.g. most news articles) - no need to split at all
+        
         return [text]
 
     chunks = []
@@ -49,7 +39,7 @@ def chunk_text(text: str, chunk_size: int = CHUNK_SIZE_TOKENS, overlap: int = CH
 
         if end == len(tokens):
             break
-        start = end - overlap  # step forward, but re-include the overlap window
+        start = end - overlap 
 
     return chunks
 
@@ -67,14 +57,10 @@ def count_tokens(text: str) -> int:
 
 count_tokens_udf = udf(count_tokens, IntegerType())
 
-
-# =========================================================
 # Apply chunking to the unified Silver table
-# =========================================================
 
 silver_docs = spark.table("silver.documents")
 
-# Explode: one row per chunk, keeping all original metadata attached to each chunk
 chunked = (
     silver_docs
     .withColumn("chunks", chunk_text_udf(col("text")))
@@ -83,9 +69,6 @@ chunked = (
     .drop("chunks", "text")
 )
 
-# Add a stable chunk_id by combining source_id with a row index within each document.
-# (Using monotonically_increasing_id is simpler but not stable across re-runs;
-#  for a learning project this is acceptable, but worth noting as a known limitation.)
 from pyspark.sql.functions import monotonically_increasing_id
 
 chunked = chunked.withColumn("chunk_id", monotonically_increasing_id())
